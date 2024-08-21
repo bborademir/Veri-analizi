@@ -1,0 +1,196 @@
+---
+title: "Regresyon Final Sınavı"
+author: "Buğra Bora Demir", 121520063
+date: "2023-01-16"
+output: html_document
+---
+## 1.a)
+```{r setup, include=FALSE}
+heart<-read.csv("heart.csv")
+heart
+heart<-as_tibble(heart)
+head(heart)
+```
+
+Modeldeki tüm değişkenlerin modele etkisini araştırmak için:
+
+```{r}
+model <- glm(target ~., family = "binomial", data = heart)
+tidy(model)
+```
+
+0 ve 1 değerlerine göre veri setinin train/test ayırımı yapılması gerekir:
+
+
+```{r, echo=FALSE}
+table(heart$target)
+```
+138 adet 0 165 adet 1 mevcuttur veride.
+
+138 adet 0 veri setinin %75'ine göre train ayırması yapılacaktır:
+
+
+```{r}
+targetcritic<-heart %>% filter(target==1)
+targetnotcritic<-heart %>% filter(target==0)
+nrow(targetcritic)
+nrow(targetnotcritic)
+set.seed(125)
+targetnotIndex<-sample(1:nrow(targetnotcritic),size=0.75*nrow(targetnotcritic))
+targetIndex<-sample(1:nrow(targetcritic),size=0.75*nrow(targetnotcritic))
+trainCritic<-targetcritic[targetIndex, ]
+trainNotcritic<-targetnotcritic[targetnotIndex, ]
+```
+satır bazında trainset birleştirmesi:
+
+```{r}
+trainset<-rbind(trainCritic,trainNotcritic)
+trainset
+table(trainset$target)
+```
+verilerimiz 138'in %75i olarak 103 adet ayrılmıştır:
+
+```{r}
+model1<- glm(target ~ .,family = "binomial",data=trainset)
+model1
+exp(coef(model1))
+summary(model1)
+```
+
+testset:
+```{r}
+testCritic<-targetcritic[-targetIndex, ]
+testNotCritic<-targetnotcritic[-targetnotIndex, ]
+#Şimdi bu iki parcayı birleştirirsek, satır bazında birleştirme yapacagımız icin rbind kullanıcaz
+testset<-rbind(testCritic,testNotCritic)
+table(testset$target)
+```
+
+
+## 1.b)
+
+```{r}
+anova(model1)
+```
+chol ve fbs değişkenlerinin modele katkısı çok çok düşüktür onları çıkartmak modeli iyi bir hale getirebilir.
+```{r}
+varImp(model1)
+```
+varImp fonksiyonu ile de önemsiz oldukları desteklenmektedir.
+
+```{r}
+model2 <- glm(target~age+sex+cp+trestbps+restecg+thalach+exang+oldpeak+slope+ca+thal,family="binomial", data =trainset)
+summary(model2)
+tidy(model2)
+tidy(model1)
+summary(model1)
+```
+
+model1 AIC=175
+model2 AIC=172
+
+model2'nin AIC değeri az farkla daha iyi
+
+Residual Deviance model1: 147
+Residual Deviance model2 = 148
+
+çok az bir farkla model 1 daha iyi
+
+Pseudo R2
+
+```{r}
+list(model1 = pscl::pR2(model1)["McFadden"],
+     model2 = pscl::pR2(model2)["McFadden"])
+```
+Pseudo R2 bakımından model1 çok az farkla yüksek bir değer verdi
+```{r}
+Anova <- anova(model1, model2, test = "Chisq")
+Anova
+```
+
+olabilirlik oran testi de bu model1'in daha iyi bir model olduğunu desteklemiştir
+## SONUÇ
+
+model1 ile yola devam edilmesi gerekmektedir.
+
+## 1.c)
+
+
+```{r}
+predict<-predict(model1,testset,type="response")
+predict
+cm<-InformationValue::confusionMatrix(testset$target,predictedScores = predict)
+cm
+accuracy1<-(cm[2,1]+cm[1,1])/sum(cm)
+accuracy1
+```
+accuracy = 0.36 model1
+
+```{r}
+predict2<-predict(model2,testset,type="response")
+predict2
+cm<-InformationValue::confusionMatrix(testset$target,predictedScores = predict2,)
+cm
+accuracy2<-(cm[2,1]+cm[1,1])/sum(cm)
+accuracy2
+```
+accuracy2 = 0.36 model2 accuracy'ler eşit durumda yani model1'i tercih ederim çünkü diğer metrikleri bir adım önde.
+
+
+
+
+## 1.d)
+
+```{r}
+rocModel<-roc(testset$target~predict1)
+plot(rocModel)
+```
+
+```{r}
+rocModel1<-roc(testset$target~predict2)
+plot(rocModel1)
+```
+
+```{r}
+rocModel
+rocModel1
+```
+
+
+## 2.a)
+
+```{r}
+model3<- lm(thalach~age+sex+cp+trestbps+chol+thalach+target,data=heart)
+summary(model3)
+```
+Model p değeri < 2.2e-16 ile anlamlı bir model fakat R2 0.29 ile açıklayıcılığı çok düşük bir model.
+
+Varsayım kontrolleri
+
+
+```{r}
+qqnorm(residuals(model3),ylab="residuals",main="Model QQPLOT",col="darkseagreen4",col.main="blue",font.lab=1.5,col.lab="darkslategray",col.axis="darkslategray")
+qqline(residuals(model3),col="red")
+```
+```{r}
+hist(residuals(model3),xlab="Residuals",main="")
+```
+
+
+```{r}
+plot(density(residuals(model3),na.rm = T),main="Model Yogunluk Grafigi",col="darkgoldenrod4",col.main="darkgoldenrod3")
+```
+modelin hataları normale yakın dağılmaktadır bir problem gözükmemektedir.
+
+
+
+
+```{r}
+library(lmtest)
+bptest(model3)
+
+```
+
+Varyanslar homojen dağılmamıştır bpteste göre yani değişen varyans sorunu mevcut
+
+ağırlıklandırılmış EKK ile bu durum düzeltilebilir.

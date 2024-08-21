@@ -1,0 +1,449 @@
+---
+title: "Regresyon Ödevi"
+author: "Buğra Bora Demir 121520063"
+date: "2023-01-06"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# VERİ SEÇİMİ VE BAŞLANGIÇ
+
+<https://archive.ics.uci.edu/ml/datasets/Optical+Interconnection+Network+>
+linkinde bulunan Optical Interconnection Network datasını seçiyorum.
+Toplam 640 gözlem, 2'si karakter olmak üzere toplam 10 değişkenden
+oluşmaktadır.
+
+Veri seti, Ağ benzetim ve modelleme araçlarından biri olan OPNET modeler
+isimli program üzerinde yapılan bir simülasyonu içermektedir.
+
+# GEREKLİ PAKETLER, SET.SEED VE VERİ TANIMLAMASI
+
+```{r message=FALSE, warning=FALSE}
+library(knitr)
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(broom)
+library(ggpubr)
+library(ISLR)
+library(caret)
+library(POET)
+library(lmtest)
+library(car)
+library(mice)
+library(quantreg)
+set.seed(130)
+oinetwork <- read_excel("Downloads/optical_interconnection_network.xlsx")
+names(oinetwork)
+```
+
+# MODEL KURMA VE SEÇME AŞAMASI
+
+*BAĞIMLI DEĞİŞKEN:Input_Waiting_Time(Girdi Bekleme Süresi)*
+
+*BAĞIMSIZ DEĞİŞKENLER:* **Node_Number**, **T_R**,
+**Processor_Utilization**, **Channel_Waiting_Time**,
+**Network_Response_Time**, **Channel_Utilization**
+
+```{r}
+oin <- oinetwork[c("Input_Waiting_Time","Channel_Utilization","Network_Response_Time","Channel_Waiting_Time","Processor_Utilization","Thread_Number","T_R","Node_Number")]
+```
+
+# VERİ TEMİZLEME, TEMİZ VERİ KİRLETME AŞAMASI
+
+```{r}
+
+md.pattern(oin)
+```
+
+Veride "Missing Data" mevcut olmadığından dolayı veriyi kirletmek
+zorundayım.
+
+```{r}
+set.seed(130)
+oin$Input_Waiting_Time[sample(1:640,7)] = NA
+oin$Channel_Utilization[sample(1:640,7)] = NA
+oin$Network_Response_Time[sample(1:640,7)] = NA
+oin$Channel_Waiting_Time[sample(1:640,7)] = NA
+oin$Processor_Utilization[sample(1:640,7)] = NA
+oin$Thread_Number[sample(1:640,7)] = NA
+oin$Node_Number[sample(1:640,7)] = NA
+```
+
+```{r}
+md.pattern(oin)
+```
+
+Şimdi veriyi doldurma işlemini yapıyorum.
+
+```{r message=FALSE, warning=FALSE}
+imputedoin <- mice(oin,m =5)
+imputedoin <- complete(imputedoin,3)#3. seçenek ile doldurma işlemi yapıldı
+```
+
+```{r}
+md.pattern(imputedoin)
+```
+
+Veri temizlendi, veride "Missing Data" kalmadı.
+
+# MODEL OLUŞTURMA AŞAMASI
+
+## AŞAMALI REGRESYON
+
+```{r}
+orneklemoin <-sample(1:nrow(imputedoin),size=0.8*nrow(imputedoin))
+trainset<-imputedoin[orneklemoin,]
+testset<-imputedoin[-orneklemoin,]
+
+```
+
+Zaman serisi olmadığı için rastgele olarak ayrılabilecek olan verimi,
+%80 eğitim %20 test olarak ayırıyorum.
+
+Aşamalı regresyon yaparak hangi değişkenlerin eklenmesi modeli olumlu
+etkileyecek bunu inceleyeceğim.
+
+```{r}
+step(lm(Input_Waiting_Time~1, data=trainset),direction = "forward",
+     scope = ~Channel_Utilization+Network_Response_Time+Channel_Waiting_Time+Processor_Utilization+ Thread_Number+T_R+Node_Number)
+```
+
+Görüldüğü üzere *Node_Number* ve *Channel_Utilization* değişkenlerinin
+modelde olmaması sonucunda optimum düzeydeki model elde ediliyor.
+
+Bu oluşan model ile aykırılardan arındırılmış modeli karşılaştırıp en
+iyi modele karar vereceğim. Böylece aykırıların model üzerindeki etkisi
+de ortaya çıkacaktır.
+
+```{r}
+model <- lm(Input_Waiting_Time~Network_Response_Time+Channel_Waiting_Time+Processor_Utilization+Thread_Number,data=trainset)
+summary(model)
+```
+
+Modelin **R2** değeri 0.927, **standart hatası** 63.11, **p değeri ise
+2.2e-16** model çok yüksek açıklayıcılık oranına sahip şu anlık
+herhangibir müdahele gerekmemektedir.
+
+```{r}
+cor(imputedoin)
+```
+
+0.80'in üstündeki korelasyon seviyeleri Multicollinearity problemi
+yaratabilecektir, bu durumda bu değişkenlerden bir tanesi
+çıkartılmalıdır.
+
+```{r}
+plot(model)
+```
+
+**Grafik 1**:Artıkların dağılışı değişen varyans problemi olma
+ihtimalini göz önüne koyuyor.
+
+**Grafik 2**:Hatalar çizginin üzerine tam oturmuş durumda, hiçbir
+problem gözükmemekle beraber 1 değişken çizginin fazlaca dışındadır.
+
+**Grafik 3**:Standartlaştırılmış artıklar.
+
+**Grafik 4** :Artıkların sol tarafa doğru baskın olduğu görülmektedir.
+
+# DEĞİŞEN VARYANS TESTİ
+
+```{r}
+bptest(model)
+```
+
+Breusch-Pagan için H0 hipotezi red, **p değeri 3.492e-11** yani \<0.05
+olduğu için değişen varyans problemi mevcuttur.
+
+Çözüm için önce artıklardan arındırılmış model kurulabilir, eğer bu
+durumda da modelde değişen varyans mevcut ise ağırlaklandırılmış EKK
+uygulanıp bu durum düzeltilebilir.
+
+# AYKIRI DEĞER KONTROLÜ
+
+Aykırı değer kontrolü bir "distance" üzerinden yapılır. 2 yolu vardır:
+
+**-Herhangi bir distance bütün dist'ların ortalamasının 3 katından daha
+büyükse aykırı olabilir**
+
+**-Herhangi bir distance 4/tüm dist değerinden büyükse aykırı olabilir**
+
+```{r}
+dist<-cooks.distance(model)
+head(dist)
+```
+
+*Ölçütler*
+
+```{r}
+olcut1<- mean(dist)*3
+olcut2<-4/length(dist)
+olcut1;olcut2
+```
+
+*Ölçütler bazında değerlendirme:*
+
+```{r}
+olcut1Index<-which(dist>olcut1)
+olcut2Index<-which(dist>olcut2)
+length(olcut1Index)
+length(olcut2Index)
+```
+
+*Ölçüt 1'e göre 3 Ölçüt 2'ye göre 27 tane aykırı değer olduğu
+görülmüştür.* *Ölçüt 2'ye göre devam edelim çünkü daha fazla aykırı
+değer saptanmıştır.*
+
+```{r}
+plot(1:length(dist),dist,type='p',ylim=range(dist)*c(1,0.007))
+abline(h=olcut2,col='red')
+```
+
+Şimdi bu aykırı değerleri eğitim verisinden çıkartıyorum.
+
+```{r}
+trainsetRem<-trainset[-olcut2Index,]
+nrow(trainset)
+```
+
+```{r}
+nrow(trainsetRem)
+```
+
+*27 adet veri çıkartılmış oldu.*
+
+# MODEL KARŞILAŞTIRMASI
+
+```{r}
+model2 <- lm(Input_Waiting_Time~Network_Response_Time+Channel_Waiting_Time+Processor_Utilization+Thread_Number,data=trainsetRem)
+summary(model2)
+```
+
+Aykırılardan arınmış haliyle bu modelin R\^2'si 0.96 olmakla beraber
+Network_Response_Time değişkeni anlamsız bir hale dönüştü ve hatası da
+46.61'e indi. Anlamsız değişkeni modelden çıkartıyorum.
+
+```{r}
+model2 <- lm(Input_Waiting_Time~Channel_Waiting_Time+Processor_Utilization+Thread_Number,data=trainsetRem)
+summary(model2)
+```
+
+```{r}
+bptest(model2)
+```
+
+Hâlâ değişen varyans problemi devam etmektedir.
+
+```{r}
+plot(model2)
+```
+
+Aykırılardan arınmış modelin grafiğinde baskınlığın azaldığını
+görmekteyiz fakat değişen varyans problemi hâlâ devam etmektedir.
+
+# AĞIRLIKLANDIRILMIŞ EKK YÖNTEMİ
+
+```{r}
+artiklar<- residuals(model2)
+artiklarkaresi<- artiklar ** 2
+tahmin <- predict(model2)
+```
+
+```{r}
+pairs(~artiklarkaresi+artiklar+tahmin+Channel_Waiting_Time+Processor_Utilization+Thread_Number,data=trainsetRem,main="Simple Scatterplot Matrix")
+```
+
+```{r}
+agirlikli<-lm(abs(artiklar)~Channel_Waiting_Time+Processor_Utilization+Thread_Number,data=trainsetRem)
+weights<-1/predict(agirlikli)^2
+agirlikmodel<-lm(Input_Waiting_Time~Channel_Waiting_Time+Processor_Utilization+Thread_Number,data=trainsetRem,weight=weights)
+summary(agirlikmodel)
+
+```
+
+Ağırlıklandırılmış modelini *R2'si 0.97'ye* çıkmakla beraber artıkların
+*standart hatası 1.19'a* düştüğü gözlendi.
+
+```{r}
+bptest(agirlikmodel)
+```
+
+Breusch-Pagan testi ile değişen varyans probleminin ortadan kalktığı
+görülmüş oldu.
+
+```{r}
+agirlikliartik<- diag(sqrt(weights)) %*% residuals(agirlikmodel)
+
+par(mfrow=c(1, 2))
+
+plot(trainsetRem$Input_Waiting_Time, artiklar, ylim = range(-200, 200))
+plot(trainsetRem$Input_Waiting_Time, diag(sqrt(weights)) %*% agirlikliartik, ylim = range(-0.2, 0.2))
+```
+
+Grafikle de bu problemin ortadan kalktığı doğrulanmıştır.
+
+# METRİKLER ÜZERİNDEN KARŞILAŞTIRMA
+
+```{r}
+AIC(model2,k=5)
+```
+
+```{r}
+AIC(agirlikmodel,k=5)
+```
+
+```{r}
+BIC(model2)
+```
+
+```{r}
+BIC(agirlikmodel)
+```
+
+Metrikler bazında ağırlıklandırılmış modelin aykırılardan arındırılmış
+modelden daha iyi olduğu gözlenmektedir.
+
+# TEST SETİ ÜZERİNDEN MODEL DEĞERLENDİRMESİ
+
+*Aykırı değerlerden arındırılmış model için:*
+
+```{r}
+tahmin3 <- predict(model2, testset)
+R2(tahmin3, testset$Input_Waiting_Time)
+```
+
+```{r}
+RMSE(tahmin3, testset$Input_Waiting_Time)
+```
+
+```{r}
+MAE(tahmin3, testset$Input_Waiting_Time)
+```
+
+*Ağırlıklandırlmış EKK yöntemi ile kurulan model için:*
+
+```{r}
+tahmin4 <- predict(agirlikmodel, testset)
+R2(tahmin4, testset$Input_Waiting_Time)
+```
+
+```{r}
+RMSE(tahmin4, testset$Input_Waiting_Time)
+```
+
+```{r}
+MAE(tahmin4, testset$Input_Waiting_Time)
+```
+
+İncelemeler doğrultusunda ağırlıklandırılmış model ile aykırıdan
+arındırılmış model arasında tahminler ölçütünde fark olmadığı ortaya
+çıkmıştır. Metrikler bakımından ağırlıklı modelin daha iyi olduğu ve
+çoklu bağlantı sorunun ortadan kalkması durumu göz önüne alındığında
+**ağırlıklı modelin** kullanılmasının daha iyi olacağı sonucuna
+varılmıştır.
+
+# ÇOKLU BAĞLANTI SORUNU İNCELEMESİ
+
+Bağımlı değişkeni açıklayan bağımsız değişkenler kendi aralarında yüksek
+korelasyonlu bir ilişkideler ise yansızlık durumunun ortadan kalkmasıyla
+model gerçeklik değerini yitirecek ve yansız bir tahmin yapamayacaktır.
+
+```{r}
+vif(agirlikmodel)
+```
+
+Bakıldığı zaman vif değerinin 10'dan yüksek olması modeldeki bağımsız
+değişkenlerin birbiriyle ilişkisi olabileceğine belirten bir katsayıdır
+ve hiçbir değişkende bu değer bu kadar yüksek değildir dolayısıyla çoklu
+bağlantı sorunu bu modelde mevcut değildir.
+
+# İLİŞKİLİ HATALAR
+
+Eğer hatalar arasında ilişki yoksa hataların ε=0 doğrusu etrafında
+rastgele dağılması gerekir. Aksi durumda otokorelasyon probleminden söz
+edilebilir.
+
+```{r}
+a<- length(residuals(agirlikmodel))
+plot(tail(residuals(agirlikmodel), a-1) ~ head(residuals(agirlikmodel), a-1), xlab= expression(hat(epsilon)[i]), ylab=expression(hat(epsilon)[i+1]), ylim=range(-1000, 1000), xlim=range(-1000, 1000))
+abline(h=0,v=0,col=grey(0.75))
+```
+
+Grafik açık bir şekilde otokorelasyon probleminin olmadığını
+göstermektedir.
+
+Bu grafiği *Durbin-Watson testi* ile destekleyebiliriz:
+
+```{r}
+dwtest(lm(Input_Waiting_Time~Network_Response_Time+Channel_Waiting_Time+Processor_Utilization+Thread_Number,data=trainsetRem))
+```
+
+DW değeri 2'ye yakın, p değeri 0.05'ten büyük sonuç olarak otokorelasyon
+yoktur.
+
+*Breusch-Godfrey testi:*
+
+```{r}
+lmtest::bgtest(agirlikmodel, order = 3)
+```
+
+p\>0.05 H0 reddedilemez, dolayısıyla otokorelasyon mevcut değil.
+
+# VARSAYIM KONTROLÜ
+
+## HATALAR DAĞILIMI NORMALLİĞİ
+
+```{r}
+plot(agirlikmodel)
+```
+
+```{r}
+qqnorm(residuals(agirlikmodel),ylab="residuals",main="Model QQPLOT",col="darkseagreen4",col.main="blue",font.lab=1.5,col.lab="darkslategray",col.axis="darkslategray")
+qqline(residuals(agirlikmodel),col="red")
+```
+
+Hataların dağılımı, çizgi üzerinde olabildiğince ideal bir şekilde
+yayılmış durumda, bu grafik hataların normallik dağılımını destekler
+niteliktedir.
+
+*Histogram:*
+
+```{r}
+hist(residuals(agirlikmodel),xlab="Residuals",main="")
+```
+
+Ufak bir çarpıklık mevcut olmasına karşın histogram grafiğine göre
+hataların dağılımının normal olduğu desteklenmektedir.
+
+*Model Yoğunluk Grafiği:*
+
+```{r}
+plot(density(residuals(agirlikmodel),na.rm = T),main="Model Yoğunluk Grafiği",col="darkgoldenrod4",col.main="darkgoldenrod3")
+```
+
+Yine histogramda olduğu gibi yoğunluk grafiğinde de ufak miktardaki
+çarpıklık görülmesine karşın hataların normal dağıldığı yorumu
+grafiklerle desteklenmektedir.
+
+## VARYANSLAR HOMOJEN Mİ?
+
+```{r}
+plot(fitted(agirlikmodel), residuals(agirlikmodel), xlab="Fitted", ylab="Residuals", ylim=range(-700, 700))
+abline(h=0)
+```
+
+Grafikten anlaşılacağı üzere değişen varyans sorunu gözükmemektedir,
+Breusch-Pagan ile de doğrulayacak olursak
+
+```{r}
+plot(fitted(agirlikmodel), sqrt(abs(residuals(agirlikmodel))), xlab="Fitted", ylab= expression(sqrt(hat(epsilon))), xlim=range(0, 1500), ylim=range(0, 40))
+```
+
+```{r}
+bptest(agirlikmodel)
+```
+
+Test ile de değişen varyans sorunu olmadığı doğrulanmıştır.
